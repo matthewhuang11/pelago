@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
-import { api } from "./api";
+import { api, inTauri } from "./api";
 import type { Config, Editor, Project, ProjectList, View } from "./types";
 import { ToastProvider, useToast } from "./components/Toast";
 import Onboarding from "./components/Onboarding";
@@ -9,6 +9,10 @@ import ProjectDrawer from "./components/ProjectDrawer";
 import Palette, { type Command } from "./components/Palette";
 import { ProjectGrid, type ProjectActions } from "./components/ProjectCard";
 import { Spinner } from "./components/ui";
+import NewProjectWizard from "./components/NewProjectWizard";
+import MoveDialog from "./components/MoveDialog";
+import GroupDialog from "./components/GroupDialog";
+import type { GroupInfo } from "./types";
 import { classNames, formatBytes } from "./util";
 
 export default function App() {
@@ -43,6 +47,9 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
   const [sort, setSort] = useState<SortKey>("recent");
   const [detail, setDetail] = useState<Project | null>(null);
   const [palette, setPalette] = useState(false);
+  const [creating, setCreating] = useState<{ group: string | null } | null>(null);
+  const [moving, setMoving] = useState<Project | null>(null);
+  const [editingGroup, setEditingGroup] = useState<GroupInfo | null | "new">(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -66,6 +73,22 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
     refresh();
     refreshEditors();
   }, [refresh, refreshEditors]);
+
+  // Browser preview only: jump to a scene from URL params (used by scripts/screenshot.sh).
+  useEffect(() => {
+    if (inTauri || !list) return;
+    import("./mock").then(({ mockScene }) => {
+      if (mockScene.view === "unsorted") setView({ kind: "unsorted" });
+      if (mockScene.view === "parked") setView({ kind: "parked" });
+      if (mockScene.view === "settings") setView({ kind: "settings" });
+      if (mockScene.view === "group") setView({ kind: "group", name: "Startups" });
+      if (mockScene.open === "new") setCreating({ group: "Startups" });
+      if (mockScene.open === "move") setMoving(list.projects.find((p) => p.location === "external") ?? null);
+      if (mockScene.open === "palette") setPalette(true);
+      if (mockScene.open === "detail") setDetail(list.projects[1] ?? null);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list === null]);
 
   // Re-scan when the window regains focus (projects change outside Pelago).
   useEffect(() => {
@@ -122,6 +145,20 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
       }
     },
     reveal: (p) => api.revealInFinder(p.path).catch(toast.error),
+    move: (p) => {
+      setDetail(null);
+      setMoving(p);
+    },
+    publish: async (p, isPrivate) => {
+      try {
+        toast.show(`Creating ${isPrivate ? "private" : "public"} repo for ${p.name}…`);
+        const slug = await api.publishProject(p.path, isPrivate);
+        toast.show(`Published to github.com/${slug}`, "success");
+        refresh();
+      } catch (e) {
+        toast.error(e);
+      }
+    },
   };
 
   const sorted = useCallback(
@@ -280,6 +317,22 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
             <div key={w.kind + w.path} className="notice warn" style={{ marginTop: 16 }}>
               <span className="ico">⚠️</span>
               <span className="grow">{w.message}</span>
+              {w.kind === "emptyOuterRepo" && (
+                <button
+                  className="btn small"
+                  onClick={async () => {
+                    try {
+                      await api.removeEmptyRepo(w.path);
+                      toast.show("Moved the empty .git folder to the Trash", "success");
+                      refresh();
+                    } catch (e) {
+                      toast.error(e);
+                    }
+                  }}
+                >
+                  Remove it
+                </button>
+              )}
             </div>
           ))}
 
@@ -379,6 +432,19 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
               </div>
             )}
           </div>
+          {view.kind === "group" && (
+            <>
+              <button
+                className="btn ghost gray small"
+                onClick={() => setEditingGroup(groups.find((g) => g.name === view.name) ?? null)}
+              >
+                Edit group
+              </button>
+              <button className="btn small" onClick={() => setCreating({ group: view.name })}>
+                + New here
+              </button>
+            </>
+          )}
         </div>
         {toolbar}
         <ProjectGrid projects={sorted(ps)} groups={groups} actions={actions} showGroup={view.kind !== "group"} empty={empty} />
@@ -398,7 +464,12 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
         {navItem({ kind: "pinned" }, "⭐", "Pinned", pinned.length)}
         {navItem({ kind: "unsorted" }, "📥", "Unsorted", unsorted.length)}
         {navItem({ kind: "parked" }, "☁️", "Parked", parked.length)}
-        <div className="nav-label caps faint">Groups</div>
+        <div className="nav-label caps faint row">
+          <span className="grow">Groups</span>
+          <button className="icon-btn" style={{ width: 24, height: 24, fontSize: 13 }} title="New group" onClick={() => setEditingGroup("new")}>
+            +
+          </button>
+        </div>
         {groups.map((g) => navItem({ kind: "group", name: g.name }, g.emoji, g.name, g.count))}
         {ungrouped.length > 0 && (
           <div className="muted" style={{ fontSize: 12, padding: "6px 14px" }}>
@@ -406,6 +477,9 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
           </div>
         )}
         <span className="spacer" />
+        <button className="btn green block" style={{ marginBottom: 8 }} onClick={() => setCreating({ group: view.kind === "group" ? view.name : null })}>
+          + New project
+        </button>
         {navItem({ kind: "settings" }, "⚙️", "Settings")}
       </nav>
       <main className="main">{content}</main>
@@ -425,6 +499,56 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
             } catch (e) {
               toast.error(e);
             }
+          }}
+        />
+      )}
+      {creating && (
+        <NewProjectWizard
+          config={config}
+          groups={groups}
+          editors={editors}
+          initialGroup={creating.group}
+          onClose={() => setCreating(null)}
+          onCreated={() => {
+            api.getConfig().then(setConfig);
+            refresh();
+          }}
+        />
+      )}
+      {moving && (
+        <MoveDialog
+          project={moving}
+          groups={groups}
+          onClose={() => setMoving(null)}
+          onMoved={(rec) => {
+            refresh();
+            toast.show(`Moved ${rec.name}`, "success", {
+              label: "Undo",
+              run: () =>
+                api
+                  .undoMove(rec.id)
+                  .then(() => {
+                    toast.show(`Moved ${rec.name} back`, "success");
+                    refresh();
+                  })
+                  .catch(toast.error),
+            });
+          }}
+        />
+      )}
+      {editingGroup && (
+        <GroupDialog
+          group={editingGroup === "new" ? null : editingGroup}
+          onClose={() => setEditingGroup(null)}
+          onSaved={(c, name) => {
+            setConfig(c);
+            if (view.kind === "group") setView({ kind: "group", name });
+            refresh();
+          }}
+          onDeleted={(c) => {
+            setConfig(c);
+            setView({ kind: "home" });
+            refresh();
           }}
         />
       )}

@@ -319,3 +319,159 @@ pub async fn gh_status() -> Result<GhStatus, String> {
 pub fn gh_login() -> Result<(), String> {
     github::open_login_terminal()
 }
+
+// ---------- create / groups / moves (Phase 2) ----------
+
+use crate::manage::{self, CreateRequest, CreateResult, MovePreview, MoveRecord};
+
+#[tauri::command]
+pub async fn create_project(
+    state: State<'_, Shared>,
+    req: CreateRequest,
+    open_after: bool,
+    editor: Option<String>,
+) -> Result<CreateResult, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let cfg = st.config();
+        let mut res = manage::create(&cfg, &req)?;
+        // Remember the toggles as next time's defaults.
+        st.update(|c| {
+            c.new_project_defaults = config::NewProjectDefaults {
+                git_init: req.git_init,
+                github: req.github.clone(),
+                open_after,
+                template: req.template.clone(),
+            };
+            if let Some(ed) = editor.clone() {
+                c.meta_mut(&res.path).editor = Some(ed);
+            }
+        })?;
+        if open_after {
+            let editor_id = editor.unwrap_or(cfg.default_editor.clone());
+            match st.find_editor(&editor_id) {
+                Ok(ed) => {
+                    if let Err(e) = editors::open(&ed, &cfg.custom_editors, Path::new(&res.path)) {
+                        res.warnings.push(e);
+                    } else {
+                        let p = res.path.clone();
+                        st.update(|c| c.meta_mut(&p).last_opened = Some(util::now_secs()))?;
+                    }
+                }
+                Err(e) => res.warnings.push(e),
+            }
+        }
+        Ok(res)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn publish_project(
+    path: String,
+    private: bool,
+    repo_name: Option<String>,
+) -> Result<String, String> {
+    blocking(move || manage::publish(Path::new(&path), private, repo_name.as_deref())).await
+}
+
+#[tauri::command]
+pub fn create_group(state: State<'_, Shared>, group: GroupMeta) -> Result<Config, String> {
+    let mut cfg = state.config();
+    manage::create_group(&mut cfg, group)?;
+    state.update(|c| {
+        *c = cfg;
+        c.clone()
+    })
+}
+
+#[tauri::command]
+pub fn update_group(
+    state: State<'_, Shared>,
+    old_name: String,
+    group: GroupMeta,
+) -> Result<Config, String> {
+    let mut cfg = state.config();
+    manage::update_group(&mut cfg, &old_name, group)?;
+    state.update(|c| {
+        *c = cfg;
+        c.clone()
+    })
+}
+
+#[tauri::command]
+pub fn delete_group(state: State<'_, Shared>, name: String) -> Result<Config, String> {
+    let mut cfg = state.config();
+    manage::delete_group(&mut cfg, &name)?;
+    state.update(|c| {
+        *c = cfg;
+        c.clone()
+    })
+}
+
+#[tauri::command]
+pub async fn preview_move(
+    state: State<'_, Shared>,
+    path: String,
+    group: Option<String>,
+    new_name: Option<String>,
+) -> Result<MovePreview, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        Ok(manage::preview_move(
+            &st.config(),
+            Path::new(&path),
+            group.as_deref(),
+            new_name.as_deref(),
+        ))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn move_project(
+    state: State<'_, Shared>,
+    path: String,
+    group: Option<String>,
+    new_name: Option<String>,
+) -> Result<MoveRecord, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let mut cfg = st.config();
+        let rec = manage::do_move(
+            &mut cfg,
+            &st.data_dir,
+            Path::new(&path),
+            group.as_deref(),
+            new_name.as_deref(),
+        )?;
+        st.update(|c| *c = cfg)?;
+        Ok(rec)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn undo_move(state: State<'_, Shared>, id: String) -> Result<MoveRecord, String> {
+    let st = state.inner().clone();
+    blocking(move || {
+        let mut cfg = st.config();
+        let rec = manage::undo_move(&mut cfg, &st.data_dir, &id)?;
+        st.update(|c| *c = cfg)?;
+        Ok(rec)
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn list_moves(state: State<'_, Shared>) -> Vec<MoveRecord> {
+    let mut moves = manage::load_log(&state.data_dir).moves;
+    moves.reverse();
+    moves.truncate(30);
+    moves
+}
+
+#[tauri::command]
+pub async fn remove_empty_repo(path: String) -> Result<(), String> {
+    blocking(move || manage::remove_empty_repo(Path::new(&path))).await
+}

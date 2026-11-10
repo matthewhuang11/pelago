@@ -3,6 +3,7 @@ mod config;
 mod editors;
 mod git;
 mod github;
+mod manage;
 mod park;
 mod scan;
 mod util;
@@ -41,6 +42,16 @@ pub fn run() {
             commands::list_editors,
             commands::gh_status,
             commands::gh_login,
+            commands::create_project,
+            commands::publish_project,
+            commands::create_group,
+            commands::update_group,
+            commands::delete_group,
+            commands::preview_move,
+            commands::move_project,
+            commands::undo_move,
+            commands::list_moves,
+            commands::remove_empty_repo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,9 +6,11 @@ import type { Config, Editor, Project, ProjectList } from "./types";
 const now = Math.floor(Date.now() / 1000);
 const day = 86400;
 
+const params = new URLSearchParams(location.search);
+
 const config: Config = {
   version: 1,
-  onboarded: new URLSearchParams(location.search).get("onboarding") !== "1",
+  onboarded: params.get("onboarding") !== "1",
   projectsRoot: "/Users/you/Code",
   scanPaths: ["/Users/you/Old Projects"],
   defaultEditor: "vscode",
@@ -109,6 +111,25 @@ const handlers: Record<string, (args: any) => unknown> = {
   project_size: () => 48 * 1024 * 1024,
   list_editors: () => editors,
   gh_status: () => ({ installed: true, loggedIn: true, user: "you", gitInstalled: true, brewInstalled: true }),
+  preview_move: ({ path, group, newName }) => {
+    const name = newName || path.split("/").pop();
+    const to = `${config.projectsRoot}${group ? `/${group}` : ""}/${name}`;
+    return {
+      from: path,
+      to,
+      toDisplay: to.replace("/Users/you", "~"),
+      ok: true,
+      blockers: [],
+      warnings: ["VS Code's recent-files list and open tabs are tied to the old path."],
+    };
+  },
+  list_moves: () => [],
+  create_project: ({ req }) => ({
+    path: `${config.projectsRoot}/${req.group}/${req.name}`,
+    githubSlug: req.github !== "none" ? `you/${req.name}` : null,
+    steps: ["Created folder", "Initialized git repo"],
+    warnings: [],
+  }),
 };
 
 export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -122,3 +143,9 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
 }
 
 export const mockState = { config, projects, editors };
+
+/** `?view=unsorted`, `?open=new`, `?open=move` etc. drive screenshot scenes. */
+export const mockScene = {
+  view: params.get("view"),
+  open: params.get("open"),
+};

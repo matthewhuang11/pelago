@@ -93,7 +93,7 @@ the snapshot was pushed.
 
 - [x] Phase 0: scaffold, CI
 - [x] Phase 1: first-run setup, project scanner, launcher UI, editor support
-- [ ] Phase 2: new-project wizard, folder-backed groups, safe moves with undo
+- [x] Phase 2: new-project wizard, folder-backed groups, safe moves with undo
 - [ ] Phase 3: park & resume
 - [ ] Phase 4: menu-bar quick open, stale-project suggestions, releases
 

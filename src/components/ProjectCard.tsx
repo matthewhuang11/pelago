@@ -8,6 +8,7 @@ export interface ProjectActions {
   togglePin: (p: Project) => void;
   reveal: (p: Project) => void;
   move?: (p: Project) => void;
+  publish?: (p: Project, isPrivate: boolean) => void;
   park?: (p: Project) => void;
   resume?: (p: Project) => void;
 }
@@ -99,6 +100,12 @@ export function ProjectCard({
                   <button onClick={() => actions.reveal(p)}>📂 Show in Finder</button>
                   <button onClick={() => actions.open(p, "terminal")}>⌨️ Open in Terminal</button>
                   {actions.move && <button onClick={() => actions.move!(p)}>🧭 Move to group…</button>}
+                  {actions.publish && !p.git?.remoteUrl && !p.empty && (
+                    <>
+                      <button onClick={() => actions.publish!(p, true)}>🔒 Publish as private repo</button>
+                      <button onClick={() => actions.publish!(p, false)}>🌍 Publish as public repo</button>
+                    </>
+                  )}
                   {actions.park && <button onClick={() => actions.park!(p)}>☁️ Park (free up space)</button>}
                 </>
               ) : (
@@ -125,7 +132,19 @@ export function ProjectCard({
         <StatusChips p={p} />
       </div>
       <div className="foot">
-        {p.git?.branch && <span className="ellipsis">⎇ {p.git.branch}</span>}
+        {p.location === "external" && actions.move ? (
+          <button
+            className="btn ghost small"
+            onClick={(e) => {
+              e.stopPropagation();
+              actions.move!(p);
+            }}
+          >
+            {p.suggestedGroup ? `Move to ${p.suggestedGroup}` : "Sort…"}
+          </button>
+        ) : (
+          p.git?.branch && <span className="ellipsis">⎇ {p.git.branch}</span>
+        )}
         <span className="spacer" />
         {p.status === "parked" ? (
           <span>{formatBytes(p.sizeBytes)} freed</span>

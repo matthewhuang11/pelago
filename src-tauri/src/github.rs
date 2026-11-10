@@ -1,5 +1,5 @@
 //! GitHub access through the user's own `gh` CLI. Pelago never stores tokens.
-#![allow(dead_code)] // helpers used by the create/park flows
+#![allow(dead_code)] // some helpers are used by the park flow
 
 use serde::Serialize;
 use std::path::Path;
@@ -72,6 +72,7 @@ pub fn create_from_local(
     name: &str,
     private: bool,
     push: bool,
+    description: Option<&str>,
 ) -> Result<String, String> {
     let dir_s = dir.to_string_lossy();
     let mut args = vec![
@@ -84,12 +85,30 @@ pub fn create_from_local(
         "--remote",
         "origin",
     ];
+    if let Some(d) = description.filter(|d| !d.trim().is_empty()) {
+        args.push("--description");
+        args.push(d);
+    }
     if push {
         args.push("--push");
     }
+    setup_git_credentials();
     util::run("gh", &args, Some(dir))?;
-    let user = require_user()?;
-    Ok(format!("{user}/{name}"))
+    // Read back the real slug (handles orgs / renamed repos).
+    util::run(
+        "gh",
+        &[
+            "repo",
+            "view",
+            "--json",
+            "nameWithOwner",
+            "--jq",
+            ".nameWithOwner",
+        ],
+        Some(dir),
+    )
+    .map(|s| s.trim().to_string())
+    .or_else(|_| require_user().map(|u| format!("{u}/{name}")))
 }
 
 /// Create an empty private repo (used for the vault).

@@ -51,7 +51,56 @@ export const api = {
   listEditors: (refresh = false) => invoke<Editor[]>("list_editors", { refresh }),
   ghStatus: () => invoke<GhStatus>("gh_status"),
   ghLogin: () => invoke<void>("gh_login"),
+  createProject: (req: CreateRequest, openAfter: boolean, editor?: string) =>
+    invoke<CreateResult>("create_project", { req, openAfter, editor }),
+  publishProject: (path: string, isPrivate: boolean, repoName?: string) =>
+    invoke<string>("publish_project", { path, private: isPrivate, repoName }),
+  createGroup: (group: GroupMeta) => invoke<Config>("create_group", { group }),
+  updateGroup: (oldName: string, group: GroupMeta) => invoke<Config>("update_group", { oldName, group }),
+  deleteGroup: (name: string) => invoke<Config>("delete_group", { name }),
+  previewMove: (path: string, group: string | null, newName?: string) =>
+    invoke<MovePreview>("preview_move", { path, group, newName }),
+  moveProject: (path: string, group: string | null, newName?: string) =>
+    invoke<MoveRecord>("move_project", { path, group, newName }),
+  undoMove: (id: string) => invoke<MoveRecord>("undo_move", { id }),
+  listMoves: () => invoke<MoveRecord[]>("list_moves"),
+  removeEmptyRepo: (path: string) => invoke<void>("remove_empty_repo", { path }),
 };
+
+export interface CreateRequest {
+  name: string;
+  group: string | null;
+  template: string;
+  gitInit: boolean;
+  github: "none" | "private" | "public";
+  repoName?: string;
+  description?: string;
+}
+
+export interface CreateResult {
+  path: string;
+  githubSlug: string | null;
+  steps: string[];
+  warnings: string[];
+}
+
+export interface MovePreview {
+  from: string;
+  to: string;
+  toDisplay: string;
+  ok: boolean;
+  blockers: string[];
+  warnings: string[];
+}
+
+export interface MoveRecord {
+  id: string;
+  name: string;
+  from: string;
+  to: string;
+  at: number;
+  undone: boolean;
+}
 
 export async function pickFolder(title: string, defaultPath?: string): Promise<string | null> {
   if (!inTauri) return window.prompt(title, defaultPath ?? "") || null;
