@@ -1,0 +1,57 @@
+name: macOS artifacts (unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+# Build artifacts only. No release publication, signing secrets or PR trigger.
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: npm ci
+      # Omit tagName, releaseName and releaseId to prevent GitHub Release uploads.
+      - name: Build app and DMG without Developer ID signing
+        uses: tauri-apps/tauri-action@v1
+        with:
+          args: --target ${{ matrix.target }} --bundles app,dmg
+      # Preserve bundle symlinks and permissions inside a tarball, not a raw upload.
+      - name: Archive application bundle
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          test -d "src-tauri/target/${TARGET}/release/bundle/macos/Pelago.app"
+          compgen -G "src-tauri/target/${TARGET}/release/bundle/dmg/*.dmg" > /dev/null
+          tar -czf "Pelago-${TARGET}.app.tar.gz" \
+            -C "src-tauri/target/${TARGET}/release/bundle/macos" Pelago.app
+      - name: Upload app archive and disk image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pelago-${{ matrix.target }}-unsigned
+          path: |
+            Pelago-${{ matrix.target }}.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14

@@ -109,7 +109,13 @@ pub fn inspect(dir: &Path) -> Option<GitInfo> {
     let mut info = GitInfo::default();
     if let Ok(status) = git(
         dir,
-        &["status", "--porcelain=v1", "-b", "--untracked-files=normal"],
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-b",
+            "--untracked-files=normal",
+        ],
     ) {
         let mut lines = status.lines();
         if let Some(header) = lines.next() {
@@ -233,7 +239,26 @@ mod tests {
             &["remote", "add", "origin", "git@github.com:me/thing.git"],
         )
         .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(p.join("a.txt"))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000))
+            .unwrap();
+        let index_before = std::fs::read(p.join(".git/index")).unwrap();
+        let index_time = std::fs::metadata(p.join(".git/index"))
+            .unwrap()
+            .modified()
+            .unwrap();
         let info = inspect(p).unwrap();
+        assert_eq!(std::fs::read(p.join(".git/index")).unwrap(), index_before);
+        assert_eq!(
+            std::fs::metadata(p.join(".git/index"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            index_time
+        );
         assert!(info.has_commits);
         assert_eq!(info.dirty, 1);
         assert_eq!(info.github_slug.as_deref(), Some("me/thing"));

@@ -1,105 +1,97 @@
-<p align="center">
-  <img src="app-icon.png" width="120" alt="Pelago icon" />
-</p>
-
+<p align="center"><img src="app-icon.png" width="120" alt="Pelago icon" /></p>
 <h1 align="center">Pelago</h1>
 
-<p align="center">
-  <b>A friendly, local-first home for your programming projects on macOS.</b><br/>
-  See every project at a glance, jump into your editor in one click, spin up new repos in seconds,
-  and park old projects in the cloud to free disk space without losing your place.
-</p>
+A local-first home for programming projects on macOS, built with Tauri 2, React and TypeScript.
+Organize projects into real folder-backed groups, scan your projects, open an editor or terminal,
+and create projects with optional Git and GitHub setup.
 
----
+## Status
 
-## Why
+Project browsing, first-run setup, editor launching, project creation, folder management, menu-bar
+quick open and stale-project suggestions are implemented. Encrypted park/resume is **experimental**:
+disposable local bare-Git round-trip and failure-path tests pass, but authenticated GitHub parking,
+actual multi-GB snapshots and native interactive tray behavior still need end-to-end acceptance.
+The frontend build, headless browser UI checks, 47 backend tests and strict Clippy pass. An Apple
+Silicon macOS application bundle builds successfully. See [validation evidence](docs/VALIDATION.md)
+for the exact checks and remaining limits. Keep independent backups.
 
-Finder is a bad project manager. Projects end up scattered across `~/Desktop`, `~/Downloads`,
-`~/untitled folder 3`, and five different "Projects" folders. Pelago gives you one place that only
-cares about code:
+## No Pelago login
 
-- **Groups are real folders.** `~/Code/Startups/my-app` shows up in the *Startups* group. Rename a
-  group in Pelago and the folder is renamed on disk.
-- **One click to code.** Open any project in VS Code, Cursor, Windsurf, Zed, JetBrains IDEs, Xcode,
-  or a terminal.
-- **Create without the busywork.** Every step is a toggle: `git init`, GitHub repo (public, private,
-  or none), keep it on this Mac or not, which editor to open.
-- **Park & resume.** Not touching a 2 GB project for a while? Park it: Pelago saves *everything*
-  (uncommitted edits, untracked files, `.env` secrets, current branch) to GitHub, verifies it, and
-  deletes the local copy. Click it later and it comes back exactly where you left off.
+Local features require no account or login. Optional GitHub features use your own GitHub CLI (`gh`)
+authentication. Pelago has no hosted account service. Do not commit your settings, registry,
+credentials, archives or local design inspiration to this source repository.
 
-## No accounts, no database, no server
-
-Pelago is just a desktop app. Everything lives on your machine:
-
-| What | Where |
+| Data | Default location |
 | --- | --- |
-| Your projects | Real folders under your projects root (default `~/Code`) |
+| Projects | Real folders under `~/Code`, or your configured root |
 | Settings | `~/Library/Application Support/dev.pelago.app/config.json` |
 | Parked-project registry | `~/Library/Application Support/dev.pelago.app/registry.json` |
-| GitHub access | Your own [`gh`](https://cli.github.com) CLI login. Pelago never sees a token. |
+| Optional GitHub authentication | Managed by your own `gh` installation |
 
-Fork it, run it, and the first-run setup asks for *your* folders and editor.
+## Develop
 
-## Getting started
-
-### Prerequisites
-
-- macOS 11+
-- [Node.js](https://nodejs.org) 20+
-- [Rust](https://rustup.rs) (stable)
-- `git` (ships with Xcode Command Line Tools: `xcode-select --install`)
-- Optional, for GitHub features: [`gh`](https://cli.github.com) (`brew install gh && gh auth login`)
-
-### Run from source
+Requirements: macOS 11+, Xcode Command Line Tools (`xcode-select --install`), Git,
+**Node.js 22.12+** (use a supported 22.x release or newer supported even-numbered release),
+and **Rust stable**. Vite 8 requires Node 20.19+ or 22.12+, so a generic “Node 20+” is insufficient.
+CI uses Node 22 and Rust stable. Optional GitHub operations also require `gh` and `gh auth login`.
 
 ```bash
-git clone https://github.com/matthewhuang11/pelago.git
-cd pelago
-npm install
+npm ci
 npm run tauri dev
 ```
 
-### Build a `.app` / `.dmg`
+For UI-only work, `npm run dev` serves the browser preview at `http://localhost:1420`.
+Use a disposable data directory and disposable project folders for backend development:
 
 ```bash
-npm run tauri build
-# -> src-tauri/target/release/bundle/macos/Pelago.app
-# -> src-tauri/target/release/bundle/dmg/Pelago_<version>_aarch64.dmg
+PELAGO_DATA_DIR="$HOME/Library/Application Support/pelago-dev" npm run tauri dev
 ```
 
-### Contributing
+The data-directory override isolates settings, not arbitrary filesystem operations. Do not point a
+test instance at valuable projects. See [contributor checks](docs/CONTRIBUTING.md).
 
-- `npm run dev` + open <http://localhost:1420> runs the UI in a normal browser with mock data
-  (no Rust needed), handy for design work. `?onboarding=1` shows the first-run flow.
-- `PELAGO_DATA_DIR=/tmp/pelago npm run tauri dev` runs an isolated instance that won't touch your
-  real settings.
-- `cd src-tauri && cargo test` runs the backend tests (they use temp dirs and real `git`).
-- Shortcuts: <kbd>⌘K</kbd> quick open, <kbd>⌘R</kbd> rescan, <kbd>⌘,</kbd> settings.
+## Parking: experimental encrypted snapshots
 
-## How parking works
+Every project, whether public, private or without a Git remote, uses a **full encrypted
+on-disk archive** protected by a user-supplied passphrase and stored in a configured **private GitHub
+vault repository**. No vault is required for local browsing or creation. Create your own private
+vault and enter `owner/repository` in Settings before parking. The old plaintext WIP branch design
+is not used.
+The archive includes on-disk Git state, uncommitted and untracked files, ignored files and secrets.
+Encryption does not make uploading secrets risk-free.
 
-| Project type | Where the work-in-progress snapshot goes |
-| --- | --- |
-| Private GitHub repo | A hidden `pelago/wip` branch in that same repo |
-| Public GitHub repo | Your own **private** vault repo (`<you>/pelago-vault`), so half-finished code and secrets never go public |
-| No GitHub repo | Your private vault repo |
+Save all editor buffers and close editors, terminals, dev servers and other processes using the
+project before parking. Unsaved buffers, exact open tabs, terminal sessions and running process
+state are **not** promised to survive. The backend fetches, decrypts and compares the uploaded
+archive against the local tree before local removal. Symlinks (including dependency-bin links),
+hard links, linked worktrees, special files and macOS extended attributes/ACLs are blocked rather
+than silently discarded. Keep an independent backup, the local registry and your passphrase.
 
-The vault is created on first use with your own `gh` login, and only if you park something that
-needs it. Every user has their own vault. Pelago only deletes a local folder **after** confirming
-the snapshot was pushed.
+Encrypted archives are split into **32 MiB chunks**, below GitHub's per-file limit, and pushed in
+bounded batches. Hosting quotas still apply. Keep a separate backup of the local registry: it records
+the mapping between
+projects and their vault snapshots. Vault access alone is not a promise of automatic discovery or
+recovery on another Mac. Keep the passphrase separately and securely. Lost passphrases cannot be
+recovered by Pelago. See [parking and recovery](docs/PARKING.md).
 
-## Roadmap
+## Build and artifacts
 
-- [x] Phase 0: scaffold, CI
-- [x] Phase 1: first-run setup, project scanner, launcher UI, editor support
-- [x] Phase 2: new-project wizard, folder-backed groups, safe moves with undo
-- [ ] Phase 3: park & resume
-- [ ] Phase 4: menu-bar quick open, stale-project suggestions, releases
+```bash
+npm ci
+npm run tauri build -- --bundles app,dmg
+# Or, to avoid Finder/AppleScript during local packaging:
+npm run tauri build -- --bundles app
+bash scripts/package-dmg.sh
+```
 
-## Tech
-
-[Tauri 2](https://tauri.app) (Rust) + React + TypeScript. Small, fast, native-feeling.
+Native build outputs are under `src-tauri/target/release/bundle/macos/` and `bundle/dmg/`.
+Explicit `--target` builds add the target triple below `src-tauri/target/`.
+The manual/tag workflow produces separate Apple Silicon and Intel `.app` archives and `.dmg`
+workflow artifacts. It does **not** publish a GitHub Release or configure an updater.
+These are unsigned development builds, not Developer ID signed or notarized distributions.
+Gatekeeper may block them. Do not disable Gatekeeper or strip quarantine attributes. Build from
+reviewed source for development, or wait for a signed and notarized release.
+See [packaging](docs/PACKAGING.md) for triggers, artifact handling and upstream references.
 
 ## License
 

@@ -30,3 +30,19 @@ src-tauri/gen
 # Local design inspiration (never committed)
 inspo/
 *.zip
+
+# Per-user runtime state and secrets (not shared source configuration)
+/config.json
+/registry.json
+/.pelago/
+/pelago-data/
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+
+# Local packaging outputs
+*.dmg
+*.app/
+*.app.tar.gz

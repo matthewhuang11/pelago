@@ -393,6 +393,9 @@ pub fn update_group(
     old_name: String,
     group: GroupMeta,
 ) -> Result<Config, String> {
+    if group.name.trim() != old_name {
+        ensure_group_not_parked(&state, &old_name)?;
+    }
     let mut cfg = state.config();
     manage::update_group(&mut cfg, &old_name, group)?;
     state.update(|c| {
@@ -403,12 +406,26 @@ pub fn update_group(
 
 #[tauri::command]
 pub fn delete_group(state: State<'_, Shared>, name: String) -> Result<Config, String> {
+    ensure_group_not_parked(&state, &name)?;
     let mut cfg = state.config();
     manage::delete_group(&mut cfg, &name)?;
     state.update(|c| {
         *c = cfg;
         c.clone()
     })
+}
+
+fn ensure_group_not_parked(state: &AppState, name: &str) -> Result<(), String> {
+    if crate::park::load_registry(&state.data_dir)?
+        .parked
+        .iter()
+        .any(|p| p.group.as_deref() == Some(name))
+    {
+        return Err(
+            "Restore parked projects in this group before renaming or deleting its folder".into(),
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -539,5 +556,22 @@ mod state_tests {
         state.update(|c| c.stale_days = 42).unwrap();
         assert_eq!(state.config().stale_days, 42);
         assert_eq!(config::load(temp.path()).stale_days, 42);
+    }
+
+    #[test]
+    fn parked_groups_cannot_be_stranded_by_folder_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::new(temp.path().to_path_buf());
+        let registry = serde_json::json!({ "version": 1, "parked": [{
+            "name": "demo", "path": "/example/Archive/demo", "group": "Archive",
+            "mode": "vault", "snapshotRepo": "user/vault",
+            "snapshotRef": "refs/heads/pelago/demo", "snapshotCommit": "0".repeat(40),
+            "stack": [], "sizeBytes": 1, "parkedAt": 1, "lastActivity": 1
+        }] });
+        config::write_json(&crate::park::registry_path(temp.path()), &registry).unwrap();
+        assert!(ensure_group_not_parked(&state, "Archive").is_err());
+        assert!(ensure_group_not_parked(&state, "Other").is_ok());
+        std::fs::write(crate::park::registry_path(temp.path()), "corrupt").unwrap();
+        assert!(ensure_group_not_parked(&state, "Other").is_err());
     }
 }
