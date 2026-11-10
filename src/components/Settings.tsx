@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, errorText, pickFolder } from "../api";
+import { api, errorText, pickFolder, type MoveRecord } from "../api";
+import { timeAgo } from "../util";
 import type { Config, Editor, GhStatus } from "../types";
 import { useToast } from "./Toast";
 import { Spinner } from "./ui";
@@ -20,11 +21,18 @@ export default function Settings({
   const [checking, setChecking] = useState(false);
   const [custom, setCustom] = useState({ name: "", command: "" });
   const [stale, setStale] = useState(String(config.staleDays));
+  const [moves, setMoves] = useState<MoveRecord[]>([]);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [undoing, setUndoing] = useState<string | null>(null);
+  const loadMoves = () => api.listMoves().then(setMoves).catch((e) => setMoveError(errorText(e)));
+  useEffect(() => { loadMoves(); }, []);
 
   const checkGh = async () => {
     setChecking(true);
     try {
       setGh(await api.ghStatus());
+    } catch (e) {
+      toast.error(e);
     } finally {
       setChecking(false);
     }
@@ -238,8 +246,7 @@ export default function Settings({
               }}
             />
             <div className="hint">
-              Used when parking public or repo-less projects so work-in-progress never goes public. Created automatically
-              (private) the first time it's needed.
+              Required for every parked project. Full snapshots are encrypted with your passphrase and uploaded only to a private vault. Pelago never persists your passphrase.
             </div>
           </div>
         </div>
@@ -269,6 +276,23 @@ export default function Settings({
         </div>
       </div>
 
+      <div className="section">
+        <h3 style={{ marginBottom: 12 }}>🧭 Move history</h3>
+        <div className="card col" style={{ gap: 14 }}>
+          {moveError && <div className="notice error" role="alert">{moveError}</div>}
+          {!moves.length && <div className="muted">No moves recorded yet.</div>}
+          {[...moves].reverse().map((move) => <div className="row" key={move.id}>
+            <div className="grow"><b>{move.name}</b><div className="hint">{timeAgo(move.at)}{move.undone ? " · Undone" : ""}</div><div className="mono hint" style={{ overflowWrap: "anywhere" }}>{move.from} → {move.to}</div></div>
+            <button className="btn ghost small" disabled={move.undone || undoing !== null} onClick={async () => {
+              setUndoing(move.id);
+              try { await api.undoMove(move.id); await loadMoves(); onChanged(await api.getConfig()); toast.show(`Moved ${move.name} back`, "success"); }
+              catch (e) { toast.error(e); }
+              finally { setUndoing(null); }
+            }}>{undoing === move.id ? "Undoing…" : move.undone ? "Undone" : "Undo"}</button>
+          </div>)}
+          <div className="hint">Undo moves files back only when the original destination is safe. Editor tabs and running processes are not restored.</div>
+        </div>
+      </div>
       <div className="section">
         <h3 style={{ marginBottom: 12 }}>🔒 Your data</h3>
         <div className="card muted" style={{ fontSize: 14 }}>

@@ -121,6 +121,67 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Atomic rename which never replaces an existing destination, even an empty
+/// directory or dangling symlink. Unsupported platforms fail closed.
+pub fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes())?;
+        let to = CString::new(to.as_os_str().as_bytes())?;
+        #[cfg(target_os = "macos")]
+        unsafe extern "C" {
+            fn renamex_np(
+                from: *const std::ffi::c_char,
+                to: *const std::ffi::c_char,
+                flags: u32,
+            ) -> std::ffi::c_int;
+        }
+        #[cfg(target_os = "linux")]
+        unsafe extern "C" {
+            fn renameat2(
+                from_fd: std::ffi::c_int,
+                from: *const std::ffi::c_char,
+                to_fd: std::ffi::c_int,
+                to: *const std::ffi::c_char,
+                flags: u32,
+            ) -> std::ffi::c_int;
+        }
+        // SAFETY: both C strings remain valid through this call. The exclusive
+        // flags prevent overwriting any destination. There is no unsafe fallback.
+        #[cfg(target_os = "macos")]
+        let result = unsafe { renamex_np(from.as_ptr(), to.as_ptr(), 0x4) };
+        #[cfg(target_os = "linux")]
+        let result = unsafe { renameat2(-100, from.as_ptr(), -100, to.as_ptr(), 1) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (from, to);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "Exclusive rename is unavailable on this platform",
+        ))
+    }
+}
+
+/// Validate a single path component chosen by the user (project / group name).
+pub fn validate_absolute_path(path: &Path) -> Result<(), String> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("Use an absolute path without parent traversal (..)".into());
+    }
+    Ok(())
+}
+
 /// Validate a single path component chosen by the user (project / group name).
 pub fn validate_name(name: &str) -> Result<String, String> {
     let name = name.trim();
@@ -133,8 +194,14 @@ pub fn validate_name(name: &str) -> Result<String, String> {
     if name.starts_with('.') {
         return Err("Name can't start with a dot".into());
     }
-    if name.contains('/') || name.contains('\0') || name.contains(':') {
-        return Err("Name can't contain / or :".into());
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
+    {
+        return Err(
+            "Names may contain only ASCII letters, numbers, spaces, hyphens, underscores and dots"
+                .into(),
+        );
     }
     Ok(name.to_string())
 }
@@ -142,6 +209,39 @@ pub fn validate_name(name: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exclusive_rename_preserves_existing_destinations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let destination = tmp.path().join("destination");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("keep"), "safe").unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        assert!(rename_noreplace(&source, &destination).is_err());
+        assert!(source.join("keep").exists());
+        let fresh = tmp.path().join("fresh");
+        rename_noreplace(&source, &fresh).unwrap();
+        assert!(fresh.join("keep").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_rename_preserves_dangling_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        let destination = tmp.path().join("destination");
+        std::fs::create_dir(&source).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("missing"), &destination).unwrap();
+        assert!(rename_noreplace(&source, &destination).is_err());
+        assert!(source.is_dir());
+        assert!(
+            std::fs::symlink_metadata(destination)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 
     #[test]
     fn tilde_roundtrip() {

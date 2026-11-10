@@ -6,6 +6,8 @@ mod github;
 mod manage;
 mod park;
 mod scan;
+#[cfg(desktop)]
+mod tray;
 mod util;
 
 use std::sync::Arc;
@@ -17,6 +19,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
             // PELAGO_DATA_DIR lets contributors run an isolated instance (tests, demos).
             let data_dir = match std::env::var_os("PELAGO_DATA_DIR") {
@@ -25,6 +35,8 @@ pub fn run() {
             };
             std::fs::create_dir_all(&data_dir)?;
             app.manage(Arc::new(commands::AppState::new(data_dir)));
+            #[cfg(desktop)]
+            tray::setup(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -52,6 +64,9 @@ pub fn run() {
             commands::undo_move,
             commands::list_moves,
             commands::remove_empty_repo,
+            commands::preview_park,
+            commands::park_project,
+            commands::restore_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

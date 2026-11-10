@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 
 type Kind = "info" | "success" | "error";
 interface Toast {
@@ -30,8 +30,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [show],
   );
 
+  const value = useMemo(() => ({ show, error }), [show, error]);
+
   return (
-    <Ctx.Provider value={{ show, error }}>
+    <Ctx.Provider value={value}>
       {children}
       <div className="toasts">
         {toasts.map((t) => (

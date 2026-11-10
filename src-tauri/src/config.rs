@@ -157,18 +157,66 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    use std::io::Write;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let tmp = path.with_extension(format!("json.{}.{nonce}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|e| e.to_string())?;
+    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 pub fn save(data_dir: &Path, config: &Config) -> Result<(), String> {
+    util::validate_absolute_path(&config.root())?;
+    for path in &config.scan_paths {
+        util::validate_absolute_path(&util::expand_tilde(path))?;
+    }
+    for group in &config.groups {
+        util::validate_name(&group.name)?;
+    }
+    if !matches!(
+        config.new_project_defaults.github.as_str(),
+        "none" | "private" | "public"
+    ) {
+        return Err("Unknown GitHub privacy value".into());
+    }
     write_json(&config_path(data_dir), config)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_atomic_writes_and_invalid_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.json");
+        std::thread::scope(|scope| {
+            for index in 0..12 {
+                let path = &path;
+                scope.spawn(move || write_json(path, &vec![index; 100]).unwrap());
+            }
+        });
+        let value: Vec<u32> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value.len(), 100);
+        assert!(value.iter().all(|v| *v == value[0]));
+        let mut c = Config {
+            projects_root: "../outside".into(),
+            ..Config::default()
+        };
+        assert!(save(dir.path(), &c).is_err());
+        c.projects_root = dir.path().to_string_lossy().into_owned();
+        c.new_project_defaults.github = "unknown".into();
+        assert!(save(dir.path(), &c).is_err());
+    }
 
     #[test]
     fn roundtrip_and_partial_json() {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, errorText, type CreateResult } from "../api";
+import { api, confirmPublicPublish, errorText, type CreateResult } from "../api";
 import type { Config, Editor, GhStatus, GroupInfo } from "../types";
 import { classNames } from "../util";
 import { Modal, Spinner, Toggle } from "./ui";
@@ -26,6 +26,7 @@ export default function NewProjectWizard({
   initialGroup,
   onClose,
   onCreated,
+  onParkCreated,
 }: {
   config: Config;
   groups: GroupInfo[];
@@ -33,6 +34,7 @@ export default function NewProjectWizard({
   initialGroup?: string | null;
   onClose: () => void;
   onCreated: (path: string) => void;
+  onParkCreated: (path: string) => Promise<void>;
 }) {
   const d = config.newProjectDefaults;
   const [step, setStep] = useState<Step>("basics");
@@ -44,6 +46,7 @@ export default function NewProjectWizard({
   const [repoName, setRepoName] = useState("");
   const [description, setDescription] = useState("");
   const [openAfter, setOpenAfter] = useState(d.openAfter);
+  const [keepLocal, setKeepLocal] = useState(true);
   const [editor, setEditor] = useState(config.defaultEditor);
   const [gh, setGh] = useState<GhStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +77,10 @@ export default function NewProjectWizard({
     setStep("working");
     setError(null);
     try {
+      if (effectiveGithub === "public" && !(await confirmPublicPublish(name.trim()))) {
+        setStep("setup");
+        return;
+      }
       const res = await api.createProject(
         {
           name: name.trim(),
@@ -84,12 +91,16 @@ export default function NewProjectWizard({
           repoName: repoName.trim() || undefined,
           description: description.trim() || undefined,
         },
-        openAfter,
+        keepLocal && openAfter,
         editor,
       );
       setResult(res);
       setStep("done");
       onCreated(res.path);
+      if (!keepLocal) {
+        try { await onParkCreated(res.path); }
+        catch (e) { setResult({ ...res, warnings: [...res.warnings, `Project is still local. Could not start parking: ${errorText(e)}`] }); }
+      }
     } catch (e) {
       setError(errorText(e));
       setStep("setup");
@@ -205,9 +216,10 @@ export default function NewProjectWizard({
               title="Initialize git"
               desc={effectiveGithub !== "none" ? "Required for a GitHub repo" : "git init + first commit"}
             />
-            <Toggle on={openAfter} onChange={setOpenAfter} title="Open when it's ready" desc="Jump straight into your editor" />
+            <Toggle on={keepLocal} onChange={setKeepLocal} disabled={!config.vaultRepo} title="Keep on this Mac" desc={config.vaultRepo ? "Turn off to review encrypted parking after creation. Nothing is deleted without your passphrase and confirmation." : "Configure a private vault in Settings to enable parking after creation."} />
+            <Toggle on={keepLocal && openAfter} disabled={!keepLocal} onChange={setOpenAfter} title="Open when it's ready" desc="Jump straight into your editor" />
           </div>
-          {openAfter && (
+          {keepLocal && openAfter && (
             <div className="field">
               <label>Open with</label>
               <select className="input" value={editor} onChange={(e) => setEditor(e.target.value)}>
@@ -266,7 +278,7 @@ export default function NewProjectWizard({
               Back
             </button>
             <button className="btn green" onClick={create}>
-              Create project
+              {keepLocal ? "Create project" : "Create & review parking"}
             </button>
           </>
         )}

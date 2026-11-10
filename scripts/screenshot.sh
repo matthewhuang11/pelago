@@ -15,7 +15,7 @@ url_for() {
     home) echo "" ;;
     onboarding) echo "?onboarding=1" ;;
     unsorted|group|settings|parked) echo "?view=$1" ;;
-    new|move|palette|detail) echo "?open=$1" ;;
+    new|move|palette|detail|park|restore) echo "?open=$1" ;;
     *) echo "" ;;
   esac
 }

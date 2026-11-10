@@ -1,5 +1,5 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import type {
   Config,
   Editor,
@@ -65,7 +65,17 @@ export const api = {
   undoMove: (id: string) => invoke<MoveRecord>("undo_move", { id }),
   listMoves: () => invoke<MoveRecord[]>("list_moves"),
   removeEmptyRepo: (path: string) => invoke<void>("remove_empty_repo", { path }),
+  previewPark: (path: string) => invoke<ParkPreview>("preview_park", { path }),
+  parkProject: (path: string, passphrase: string) => invoke<unknown>("park_project", { path, passphrase }),
+  restoreProject: (path: string, passphrase: string) => invoke<void>("restore_project", { path, passphrase }),
 };
+
+export interface ParkPreview {
+  path: string;
+  sizeBytes: number;
+  fileCount: number;
+  warnings: string[];
+}
 
 export interface CreateRequest {
   name: string;
@@ -112,4 +122,10 @@ export function errorText(e: unknown): string {
   if (typeof e === "string") return e;
   if (e instanceof Error) return e.message;
   return JSON.stringify(e);
+}
+
+export async function confirmPublicPublish(name: string): Promise<boolean> {
+  const message = `Publish ${name} as a PUBLIC GitHub repository? Committed files and git history will be visible to anyone. Check for secrets, credentials and private data before continuing. This is not encrypted parking.`;
+  if (!inTauri) return window.confirm(message);
+  return confirm(message, { title: "Publish publicly?", kind: "warning", okLabel: "Publish publicly", cancelLabel: "Keep private" });
 }

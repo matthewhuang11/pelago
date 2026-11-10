@@ -2,6 +2,7 @@
 // in a normal browser to work on the UI without the Rust backend.
 // Never used inside the real app.
 import type { Config, Editor, Project, ProjectList } from "./types";
+import type { MoveRecord } from "./api";
 
 const now = Math.floor(Date.now() / 1000);
 const day = 86400;
@@ -24,7 +25,7 @@ const config: Config = {
   ],
   projects: {},
   customEditors: [],
-  vaultRepo: null,
+  vaultRepo: params.get("vault") === "missing" ? null : "you/pelago-vault",
   staleDays: 60,
   newProjectDefaults: { gitInit: true, github: "private", openAfter: true, template: "blank" },
 };
@@ -90,6 +91,8 @@ const editors: Editor[] = [
   { id: "finder", name: "Finder", kind: "terminal", installed: true, appPath: "/System/Library/CoreServices/Finder.app" },
 ];
 
+const moves: MoveRecord[] = [];
+
 function list(): ProjectList {
   const groups = config.groups.map((g) => ({
     ...g,
@@ -123,20 +126,57 @@ const handlers: Record<string, (args: any) => unknown> = {
       warnings: ["VS Code's recent-files list and open tabs are tied to the old path."],
     };
   },
-  list_moves: () => [],
-  create_project: ({ req }) => ({
-    path: `${config.projectsRoot}/${req.group}/${req.name}`,
-    githubSlug: req.github !== "none" ? `you/${req.name}` : null,
-    steps: ["Created folder", "Initialized git repo"],
-    warnings: [],
-  }),
+  list_moves: () => [...moves],
+  move_project: ({ path, group, newName }) => {
+    const p = projects.find((p) => p.path === path);
+    if (!p) throw new Error("Project not found");
+    const to = `${config.projectsRoot}${group ? `/${group}` : ""}/${newName || p.name}`;
+    const record = { id: String(Date.now()), name: p.name, from: path, to, at: Date.now() / 1000, undone: false };
+    Object.assign(p, { path: to, id: to, displayPath: to.replace("/Users/you", "~"), group, location: "root" });
+    moves.push(record);
+    return record;
+  },
+  undo_move: ({ id }) => {
+    const record = moves.find((m) => m.id === id);
+    if (!record || record.undone) throw new Error("Move cannot be undone");
+    const p = projects.find((p) => p.path === record.to);
+    if (!p) throw new Error("Project not found");
+    Object.assign(p, { path: record.from, id: record.from, displayPath: record.from.replace("/Users/you", "~"), group: null, location: "external" });
+    record.undone = true;
+    return { ...record };
+  },
+  preview_park: ({ path }) => ({ path, sizeBytes: 48 * 1024 ** 2, fileCount: 1264, warnings: ["Save every editor buffer and close processes before continuing. Unsaved buffers are not included. Editor tabs are not guaranteed to restore."] }),
+  park_project: ({ path, passphrase }) => {
+    if (!config.vaultRepo) throw new Error("Configure a private vault repository first");
+    if (typeof passphrase !== "string" || passphrase.length < 16) throw new Error("Passphrase is too short");
+    const p = projects.find((p) => p.path === path);
+    if (!p || p.status !== "local") throw new Error("Local project not found");
+    Object.assign(p, { status: "parked", parkedAt: Date.now() / 1000, sizeBytes: 48 * 1024 ** 2 });
+    return { ...p };
+  },
+  restore_project: ({ path, passphrase }) => {
+    if (!passphrase) throw new Error("Enter a passphrase");
+    const p = projects.find((p) => p.path === path);
+    if (!p || p.status !== "parked") throw new Error("Parked project not found");
+    Object.assign(p, { status: "local", parkedAt: null });
+  },
+  create_project: ({ req }) => {
+    const p = proj(req.name, req.group, [], { path: `${config.projectsRoot}${req.group ? `/${req.group}` : ""}/${req.name}`, location: "root" });
+    p.id = p.path;
+    p.displayPath = p.path.replace("/Users/you", "~");
+    projects.push(p);
+    return { path: p.path, githubSlug: req.github !== "none" ? `you/${req.name}` : null, steps: ["Created folder", "Initialized git repo"], warnings: [] };
+  },
 };
 
 export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   await new Promise((r) => setTimeout(r, 60));
+  if (params.get("fail") === cmd) throw new Error(`Preview simulation: ${cmd} failed. No files were changed.`);
+  if (["park_project", "restore_project"].includes(cmd)) await new Promise((r) => setTimeout(r, 900));
   const h = handlers[cmd];
   if (!h) {
-    console.info(`[mock] ${cmd}`, args);
+    // Never log command arguments: they may contain a snapshot passphrase.
+    console.info(`[mock] ${cmd}`);
     return undefined as T;
   }
   return h(args ?? {}) as T;

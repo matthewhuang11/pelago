@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./App.css";
-import { api, inTauri } from "./api";
+import { api, confirmPublicPublish, errorText, inTauri } from "./api";
+import { listen } from "@tauri-apps/api/event";
 import type { Config, Editor, Project, ProjectList, View } from "./types";
 import { ToastProvider, useToast } from "./components/Toast";
 import Onboarding from "./components/Onboarding";
@@ -12,6 +13,7 @@ import { Spinner } from "./components/ui";
 import NewProjectWizard from "./components/NewProjectWizard";
 import MoveDialog from "./components/MoveDialog";
 import GroupDialog from "./components/GroupDialog";
+import ParkingDialog from "./components/ParkingDialog";
 import type { GroupInfo } from "./types";
 import { classNames, formatBytes } from "./util";
 
@@ -25,12 +27,18 @@ export default function App() {
 
 function Root() {
   const [config, setConfig] = useState<Config | null>(null);
-  useEffect(() => {
-    api.getConfig().then(setConfig);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    setError(null);
+    api.getConfig().then(setConfig).catch((e) => setError(errorText(e)));
   }, []);
-  if (!config) return <div className="titlebar" data-tauri-drag-region />;
+  useEffect(() => {
+    load();
+  }, [load]);
+  if (error) return <div className="empty"><h2>Couldn't load Pelago</h2><p role="alert">{error}</p><button className="btn" onClick={load}>Try again</button></div>;
+  if (!config) return <div className="empty"><Spinner dark /><p>Loading Pelago…</p></div>;
   if (!config.onboarded) {
-    return <Onboarding defaultRoot={config.projectsRoot} onDone={() => api.getConfig().then(setConfig)} />;
+    return <Onboarding defaultRoot={config.projectsRoot} onDone={load} />;
   }
   return <Shell config={config} setConfig={setConfig} />;
 }
@@ -49,15 +57,29 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
   const [palette, setPalette] = useState(false);
   const [creating, setCreating] = useState<{ group: string | null } | null>(null);
   const [moving, setMoving] = useState<Project | null>(null);
+  const [parking, setParking] = useState<{ project: Project; restore: boolean } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<GroupInfo | null | "new">(null);
+
+  useEffect(() => {
+    if (!inTauri) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen("pelago:quick-open", () => { if (!disposed) setPalette(true); })
+      .then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch(toast.error);
+    return () => { disposed = true; unlisten?.(); };
+  }, [toast]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const l = await api.listProjects();
       setList(l);
       setDetail((d) => (d ? l.projects.find((p) => p.id === d.id) ?? null : null));
     } catch (e) {
+      setLoadError(errorText(e));
       toast.error(e);
     } finally {
       setLoading(false);
@@ -86,6 +108,8 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
       if (mockScene.open === "move") setMoving(list.projects.find((p) => p.location === "external") ?? null);
       if (mockScene.open === "palette") setPalette(true);
       if (mockScene.open === "detail") setDetail(list.projects[1] ?? null);
+      if (mockScene.open === "park") setParking({ project: list.projects.find((p) => p.status === "local")!, restore: false });
+      if (mockScene.open === "restore") setParking({ project: list.projects.find((p) => p.status === "parked")!, restore: true });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [list === null]);
@@ -128,6 +152,7 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
 
   const actions: ProjectActions = {
     open: async (p, editor) => {
+      if (p.status === "parked") { setParking({ project: p, restore: true }); return; }
       try {
         await api.openProject(p.path, editor);
         patchProject(p.id, { lastOpened: Date.now() / 1000 });
@@ -136,6 +161,8 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
       }
     },
     details: (p) => setDetail(p),
+    park: (p) => { setDetail(null); setParking({ project: p, restore: false }); },
+    resume: (p) => { setDetail(null); setParking({ project: p, restore: true }); },
     togglePin: async (p) => {
       try {
         await api.setPinned(p.path, !p.pinned);
@@ -151,6 +178,7 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
     },
     publish: async (p, isPrivate) => {
       try {
+        if (!isPrivate && !(await confirmPublicPublish(p.name))) return;
         toast.show(`Creating ${isPrivate ? "private" : "public"} repo for ${p.name}…`);
         const slug = await api.publishProject(p.path, isPrivate);
         toast.show(`Published to github.com/${slug}`, "success");
@@ -244,8 +272,7 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
   if (!list) {
     content = (
       <div className="empty">
-        <Spinner dark />
-        <p>Scanning your projects…</p>
+        {loadError ? <><h3>Couldn't scan projects</h3><p role="alert">{loadError}</p><button className="btn" onClick={refresh}>Try again</button></> : <><Spinner dark /><p>Scanning your projects…</p></>}
       </div>
     );
   } else if (view.kind === "settings") {
@@ -267,6 +294,10 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
       .filter((p) => p.status === "local")
       .sort((a, b) => (b.lastOpened ?? 0) - (a.lastOpened ?? 0) || b.lastActivity - a.lastActivity)
       .slice(0, 6);
+    const stale = config.staleDays > 0 ? projects
+      .filter((p) => p.status === "local" && Math.max(p.lastActivity, p.lastOpened ?? 0) < Date.now() / 1000 - config.staleDays * 86400)
+      .sort((a, b) => Math.max(a.lastActivity, a.lastOpened ?? 0) - Math.max(b.lastActivity, b.lastOpened ?? 0))
+      .slice(0, 3) : [];
     content = (
       <div className="main-inner">
         <div className="banner">
@@ -335,6 +366,14 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
               )}
             </div>
           ))}
+
+        {stale.length > 0 && <div className="section">
+          <div className="section-head"><h2>☁️ Make room for what's next</h2></div>
+          <div className="card col" style={{ gap: 14 }}>
+            <p className="muted" style={{ margin: 0 }}>These projects haven't been active or opened in {config.staleDays} days. Parking is optional and always requires your passphrase and explicit local-delete confirmation.</p>
+            {stale.map((p) => <div className="row" key={p.id}><div className="grow"><b>{p.name}</b><div className="mono hint ellipsis">{p.displayPath}</div></div><button className="btn ghost small" onClick={() => actions.park?.(p)}>Review parking</button></div>)}
+          </div>
+        </div>}
 
         {pinned.length > 0 && (
           <div className="section">
@@ -410,7 +449,7 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
       title = "Parked";
       emoji = "☁️";
       ps = parked;
-      subtitle = "Saved safely to GitHub and removed from this Mac. Click one to bring it back exactly where you left off.";
+      subtitle = "Encrypted snapshots in your private GitHub vault. Restore saved files with your passphrase. Unsaved buffers are not included, and editor tabs are not guaranteed to restore.";
       empty = <EmptyState art="☁️" title="Nothing parked" text="Park a project you're not using to free disk space." />;
     } else if (view.kind === "group") {
       const g = groups.find((x) => x.name === view.name);
@@ -510,8 +549,16 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
           initialGroup={creating.group}
           onClose={() => setCreating(null)}
           onCreated={() => {
-            api.getConfig().then(setConfig);
+            api.getConfig().then(setConfig).catch(toast.error);
             refresh();
+          }}
+          onParkCreated={async (path) => {
+            const updated = await api.listProjects();
+            const project = updated.projects.find((p) => p.path === path);
+            if (!project) throw new Error("Project was created locally but could not be found for parking. Rescan and park it from its card.");
+            setList(updated);
+            setCreating(null);
+            setParking({ project, restore: false });
           }}
         />
       )}
@@ -536,6 +583,7 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
           }}
         />
       )}
+      {parking && <ParkingDialog project={parking.project} restore={parking.restore} vaultRepo={config.vaultRepo} onClose={() => setParking(null)} onComplete={async () => { await refresh(); }} />}
       {editingGroup && (
         <GroupDialog
           group={editingGroup === "new" ? null : editingGroup}
@@ -557,7 +605,7 @@ function Shell({ config, setConfig }: { config: Config; setConfig: (c: Config) =
           projects={projects}
           groups={groups}
           commands={commands}
-          onOpen={(p) => (p.status === "parked" ? setDetail(p) : actions.open(p))}
+          onOpen={(p) => actions.open(p)}
           onClose={() => setPalette(false)}
         />
       )}

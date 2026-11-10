@@ -19,25 +19,30 @@ export default function MoveDialog({
     project.suggestedGroup ?? (project.group && project.location === "root" ? null : groups[0]?.name ?? null),
   );
   const [rename, setRename] = useState("");
-  const [preview, setPreview] = useState<MovePreview | null>(null);
+  const [previewResult, setPreviewResult] = useState<{ key: string; value: MovePreview } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const previewKey = JSON.stringify([project.path, group, rename.trim()]);
+  const preview = previewResult?.key === previewKey ? previewResult.value : null;
 
   useEffect(() => {
     let live = true;
+    setPreviewResult(null);
+    setError(null);
     const t = setTimeout(() => {
       api
         .previewMove(project.path, group, rename.trim() || undefined)
-        .then((p) => live && setPreview(p))
+        .then((p) => live && setPreviewResult({ key: previewKey, value: p }))
         .catch((e) => live && setError(errorText(e)));
     }, 120);
     return () => {
       live = false;
       clearTimeout(t);
     };
-  }, [project.path, group, rename]);
+  }, [project.path, group, rename, previewKey]);
 
   const go = async () => {
+    if (busy || !preview?.ok) return;
     setBusy(true);
     setError(null);
     try {
@@ -72,6 +77,7 @@ export default function MoveDialog({
             <button
               key={g.name}
               className={classNames("choice", group === g.name && "on")}
+              disabled={busy}
               onClick={() => setGroup(g.name)}
             >
               <span className="e">{g.emoji}</span>
@@ -79,7 +85,7 @@ export default function MoveDialog({
               {project.suggestedGroup === g.name && <span className="d">Suggested</span>}
             </button>
           ))}
-          <button className={classNames("choice", group === null && "on")} onClick={() => setGroup(null)}>
+          <button className={classNames("choice", group === null && "on")} disabled={busy} onClick={() => setGroup(null)}>
             <span className="e">🏝️</span>
             <span className="t">No group</span>
           </button>
@@ -88,12 +94,12 @@ export default function MoveDialog({
 
       <div className="field" style={{ marginTop: 14 }}>
         <label>Rename (optional)</label>
-        <input className="input" placeholder={project.name} value={rename} onChange={(e) => setRename(e.target.value)} />
+        <input className="input" placeholder={project.name} value={rename} disabled={busy} onChange={(e) => setRename(e.target.value)} />
       </div>
 
       <div style={{ marginTop: 16 }} className="col">
         {!preview ? (
-          <Spinner dark />
+          !error && <div className="row" role="status"><Spinner dark /> Checking destination…</div>
         ) : (
           <>
             <div className="notice info">

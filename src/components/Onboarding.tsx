@@ -125,7 +125,7 @@ export default function Onboarding({ defaultRoot, onDone }: { defaultRoot: strin
             <div className="notice info" style={{ marginTop: 8 }}>
               <span className="ico">🔒</span>
               <span>
-                No account, no server. Everything stays on this Mac. GitHub features use your own <code>gh</code>{" "}
+                No Pelago account or server. Settings stay on this Mac. Optional GitHub features use your own <code>gh</code>{" "}
                 login.
               </span>
             </div>

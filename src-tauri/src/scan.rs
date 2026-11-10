@@ -426,6 +426,40 @@ fn collect_candidates(config: &Config, warnings: &mut Vec<Warning>) -> Vec<Candi
     out
 }
 
+/// A bounded hint, not a guarantee that a project is unused. Ignore generated trees
+/// and never follow links outside the selected project.
+fn recent_saved_activity(root: &Path) -> i64 {
+    let mut newest = util::mtime_secs(root);
+    let mut pending = vec![(root.to_path_buf(), 0)];
+    let mut remaining = 2000usize;
+    while let Some((dir, depth)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if remaining == 0 {
+                return newest;
+            }
+            remaining -= 1;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == ".git" || SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            newest = newest.max(util::mtime_secs(&entry.path()));
+            if kind.is_dir() && depth < 3 {
+                pending.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    newest
+}
+
 pub fn scan(config: &Config) -> ProjectList {
     let mut warnings = vec![];
     let candidates = collect_candidates(config, &mut warnings);
@@ -448,7 +482,8 @@ pub fn scan(config: &Config) -> ProjectList {
                 .as_ref()
                 .and_then(|g| g.last_commit)
                 .unwrap_or(0)
-                .max(util::mtime_secs(&c.path));
+                .max(recent_saved_activity(&c.path))
+                .max(meta.last_opened.unwrap_or(0));
             let suggested_group = if c.location == "external" {
                 suggest_group(&name, &stack, &group_names)
             } else {
@@ -552,6 +587,33 @@ pub fn build_groups(config: &Config, projects: &[Project], root: &Path) -> Vec<G
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn activity_hint_includes_nested_saved_files() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/deep")).unwrap();
+        let file = tmp.path().join("src/deep/main.rs");
+        fs::write(&file, "fn main() {}\n").unwrap();
+        let future = util::now_secs() + 3600;
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(future as u64))
+            .unwrap();
+        assert_eq!(recent_saved_activity(tmp.path()), future);
+        fs::create_dir_all(tmp.path().join("node_modules")).unwrap();
+        let generated = tmp.path().join("node_modules/generated.js");
+        fs::write(&generated, "ignored").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&generated)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs((future + 3600) as u64))
+            .unwrap();
+        assert_eq!(recent_saved_activity(tmp.path()), future);
+    }
 
     fn cfg(root: &Path, scan: &[&Path]) -> Config {
         Config {

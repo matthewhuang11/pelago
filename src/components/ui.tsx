@@ -45,7 +45,7 @@ export function Modal({
 }) {
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={classNames("modal", wide && "wide")} role="dialog">
+      <div className={classNames("modal", wide && "wide")} role="dialog" aria-modal="true">
         {children}
       </div>
     </div>

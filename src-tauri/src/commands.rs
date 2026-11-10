@@ -36,8 +36,10 @@ impl AppState {
     /// Mutate config and persist it atomically.
     pub fn update<R>(&self, f: impl FnOnce(&mut Config) -> R) -> Result<R, String> {
         let mut guard = self.config.lock().unwrap();
-        let out = f(&mut guard);
-        config::save(&self.data_dir, &guard)?;
+        let mut next = guard.clone();
+        let out = f(&mut next);
+        config::save(&self.data_dir, &next)?;
+        *guard = next;
         Ok(out)
     }
 
@@ -238,7 +240,7 @@ pub async fn suggest_scan_folders() -> Result<Vec<FolderSuggestion>, String> {
 #[tauri::command]
 pub async fn list_projects(state: State<'_, Shared>) -> Result<ProjectList, String> {
     let st = state.inner().clone();
-    blocking(move || Ok(crate::park::merge_parked(&st, scan::scan(&st.config())))).await
+    blocking(move || crate::park::merge_parked(&st, scan::scan(&st.config()))).await
 }
 
 #[tauri::command]
@@ -474,4 +476,68 @@ pub fn list_moves(state: State<'_, Shared>) -> Vec<MoveRecord> {
 #[tauri::command]
 pub async fn remove_empty_repo(path: String) -> Result<(), String> {
     blocking(move || manage::remove_empty_repo(Path::new(&path))).await
+}
+
+#[tauri::command]
+pub async fn preview_park(
+    state: State<'_, Shared>,
+    path: String,
+) -> Result<crate::park::ParkPreview, String> {
+    let st = state.inner().clone();
+    blocking(move || crate::park::preview_project(&st, Path::new(&path))).await
+}
+
+#[tauri::command]
+pub async fn park_project(
+    state: State<'_, Shared>,
+    path: String,
+    passphrase: String,
+) -> Result<crate::park::ParkedProject, String> {
+    let st = state.inner().clone();
+    let secret = age::secrecy::SecretString::from(passphrase);
+    blocking(move || {
+        use age::secrecy::ExposeSecret;
+        crate::park::park(&st, Path::new(&path), secret.expose_secret())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn restore_project(
+    state: State<'_, Shared>,
+    path: String,
+    passphrase: String,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    let secret = age::secrecy::SecretString::from(passphrase);
+    blocking(move || {
+        use age::secrecy::ExposeSecret;
+        crate::park::restore(&st, Path::new(&path), secret.expose_secret())
+    })
+    .await
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+
+    #[test]
+    fn failed_config_save_keeps_live_config_unchanged() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("not-a-directory");
+        std::fs::write(&data, "occupied").unwrap();
+        let state = AppState::new(data);
+        let before = state.config();
+        assert!(state.update(|c| c.stale_days = 999).is_err());
+        assert_eq!(state.config(), before);
+    }
+
+    #[test]
+    fn successful_config_save_updates_live_and_persisted_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::new(temp.path().to_path_buf());
+        state.update(|c| c.stale_days = 42).unwrap();
+        assert_eq!(state.config().stale_days, 42);
+        assert_eq!(config::load(temp.path()).stale_days, 42);
+    }
 }

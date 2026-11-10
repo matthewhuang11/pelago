@@ -32,6 +32,11 @@
   cursor: default;
 }
 
+.parking-check { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; cursor: pointer; }
+.parking-check input { accent-color: var(--ocean); width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; }
+.parking-summary { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-radius: var(--radius-sm); background: var(--ocean-light); color: var(--ocean-dark); }
+.parking-summary b { font-size: 22px; white-space: nowrap; }
+.parking-summary span { font-size: 13px; }
 * { box-sizing: border-box; }
 body { margin: 0; overflow: hidden; }
 input, textarea, select, button { font: inherit; color: inherit; }

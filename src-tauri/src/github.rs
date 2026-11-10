@@ -59,7 +59,15 @@ pub fn repo_is_private(slug: &str) -> Option<bool> {
         None,
     )
     .ok()
-    .map(|s| s.trim() == "true")
+    .and_then(|s| parse_privacy(&s))
+}
+
+fn parse_privacy(value: &str) -> Option<bool> {
+    match value.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
 }
 
 pub fn repo_exists(slug: &str) -> bool {
@@ -74,6 +82,7 @@ pub fn create_from_local(
     push: bool,
     description: Option<&str>,
 ) -> Result<String, String> {
+    validate_repo_name(name)?;
     let dir_s = dir.to_string_lossy();
     let mut args = vec![
         "repo",
@@ -113,6 +122,7 @@ pub fn create_from_local(
 
 /// Create an empty private repo (used for the vault).
 pub fn create_empty_private(name: &str, description: &str) -> Result<(), String> {
+    validate_repo_name(name)?;
     util::run(
         "gh",
         &[
@@ -126,6 +136,23 @@ pub fn create_empty_private(name: &str, description: &str) -> Result<(), String>
         None,
     )
     .map(|_| ())
+}
+
+pub fn validate_repo_name(name: &str) -> Result<(), String> {
+    let parts: Vec<_> = name.split('/').collect();
+    if parts.len() > 2
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || part.len() > 100
+                || !part.starts_with(|c: char| c.is_ascii_alphanumeric())
+                || !part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        })
+    {
+        return Err("Use a GitHub repository name (or owner/name) containing letters, numbers, dots, underscores and hyphens, starting with a letter or number".into());
+    }
+    Ok(())
 }
 
 /// Clone URL that works with whatever protocol the user configured in `gh`.
@@ -160,4 +187,25 @@ pub fn open_login_terminal() -> Result<(), String> {
         cmd.replace('\\', "\\\\").replace('"', "\\\"")
     );
     util::run("osascript", &["-e", &script], None).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn unknown_privacy_is_not_public() {
+        assert_eq!(parse_privacy("true\n"), Some(true));
+        assert_eq!(parse_privacy("false"), Some(false));
+        for value in ["", "null", "unknown", "TRUE", "{}"] {
+            assert_eq!(parse_privacy(value), None);
+        }
+    }
+
+    #[test]
+    fn repo_names_cannot_be_cli_options() {
+        assert!(validate_repo_name("owner/repo-name").is_ok());
+        for name in ["--public", "owner/--public", "a/b/c", "../x", "a b", ""] {
+            assert!(validate_repo_name(name).is_err());
+        }
+    }
 }
