@@ -68,6 +68,15 @@ npm run tauri build
 # -> src-tauri/target/release/bundle/dmg/Pelago_<version>_aarch64.dmg
 ```
 
+### Contributing
+
+- `npm run dev` + open <http://localhost:1420> runs the UI in a normal browser with mock data
+  (no Rust needed), handy for design work. `?onboarding=1` shows the first-run flow.
+- `PELAGO_DATA_DIR=/tmp/pelago npm run tauri dev` runs an isolated instance that won't touch your
+  real settings.
+- `cd src-tauri && cargo test` runs the backend tests (they use temp dirs and real `git`).
+- Shortcuts: <kbd>⌘K</kbd> quick open, <kbd>⌘R</kbd> rescan, <kbd>⌘,</kbd> settings.
+
 ## How parking works
 
 | Project type | Where the work-in-progress snapshot goes |
@@ -83,7 +92,7 @@ the snapshot was pushed.
 ## Roadmap
 
 - [x] Phase 0: scaffold, CI
-- [ ] Phase 1: first-run setup, project scanner, launcher UI, editor support
+- [x] Phase 1: first-run setup, project scanner, launcher UI, editor support
 - [ ] Phase 2: new-project wizard, folder-backed groups, safe moves with undo
 - [ ] Phase 3: park & resume
 - [ ] Phase 4: menu-bar quick open, stale-project suggestions, releases
